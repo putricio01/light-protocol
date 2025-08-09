@@ -2143,7 +2143,7 @@ dependencies = [
  "photon-api",
  "prometheus",
  "rand 0.8.5",
- "reqwest 0.12.20",
+ "reqwest 0.12.22",
  "scopeguard",
  "serde",
  "serde_json",
@@ -2189,7 +2189,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-traits",
  "rand 0.8.5",
- "reqwest 0.12.20",
+ "reqwest 0.12.22",
  "serde",
  "serde_json",
  "solana-sdk",
@@ -3571,7 +3571,7 @@ dependencies = [
  "num-traits",
  "photon-api",
  "rand 0.8.5",
- "reqwest 0.12.20",
+ "reqwest 0.12.22",
  "solana-account",
  "solana-banks-client",
  "solana-compute-budget",
@@ -3777,7 +3777,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-traits",
  "rand 0.8.5",
- "reqwest 0.12.20",
+ "reqwest 0.12.22",
  "solana-banks-client",
  "solana-sdk",
  "spl-token",
@@ -4434,7 +4434,7 @@ dependencies = [
 name = "photon-api"
 version = "0.51.0"
 dependencies = [
- "reqwest 0.12.20",
+ "reqwest 0.12.22",
  "serde",
  "serde_derive",
  "serde_json",
@@ -5051,9 +5051,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.20"
+version = "0.12.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eabf4c97d9130e2bf606614eb937e86edac8292eaa6f422f995d7e8de1eb1813"
+checksum = "cbc931937e6ca3a06e3b6c0aa7841849b160a90351d6ab467a8b9b9959767531"
 dependencies = [
  "base64 0.22.1",
  "bytes",
