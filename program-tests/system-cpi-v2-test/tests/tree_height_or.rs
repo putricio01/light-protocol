@@ -112,6 +112,7 @@ async fn tree_height_or_account_info() {
     let _tree_index = pack_pubkey_usize(&state_tree_pk.into(), &mut remaining_accounts);
 
     // NEW: read-only state account (just needs to anchor the state tree + root index)
+    /*
     let state_readonly = PackedReadOnlyCompressedAccount {
         account_hash: [0u8; 32], // not used when prove_by_index=false
         merkle_context: PackedMerkleContext {
@@ -121,7 +122,7 @@ async fn tree_height_or_account_info() {
             prove_by_index: false,
         },
         root_index: state_root_idx,
-    };
+    }; */
    
     // We don't need to provide read-only leaves; use account_info path
     let ix_data = InstructionDataInvokeCpiWithAccountInfo {
@@ -137,7 +138,7 @@ async fn tree_height_or_account_info() {
         new_address_params: packed_new_address_params,
         account_infos: vec![],
         read_only_addresses: vec![],
-        read_only_accounts: vec![state_readonly],  // <-- add this
+        read_only_accounts: vec![],  // <-- add this
     };
 
     let remaining_accounts = remaining_accounts
