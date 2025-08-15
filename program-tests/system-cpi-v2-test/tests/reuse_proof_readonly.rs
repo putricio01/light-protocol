@@ -17,7 +17,7 @@ use light_client::rpc::Rpc;
 use light_compressed_account::{
     address::{derive_address, pack_new_address_params_assigned},
     instruction_data::{
-        data::pack_pubkey_usize,
+        data::{pack_pubkey_usize, PackedReadOnlyAddress},
         with_account_info::InstructionDataInvokeCpiWithAccountInfo,
     },
     compressed_account::{PackedMerkleContext, PackedReadOnlyCompressedAccount},
@@ -118,18 +118,13 @@ async fn tree_height_or_account_info() {
     let mut remaining: HashMap<LcPubkey, usize> = HashMap::new();
 
     // 1) Address params FIRST (this inserts address_queue (=state_queue) and address_tree)
-    let new_address_params = vec![light_sdk::address::NewAddressParamsAssigned {
-        seed,
-        address_queue_pubkey: state_queue_pk.into(),        // <--- IMPORTANT: reuse STATE queue
-        address_merkle_tree_pubkey: addr_tree_pk.into(),
-        address_merkle_tree_root_index: addr_root_idx,      // from the proof
-        assigned_account_index: None,
-    }];
-    let packed_new_address_params = pack_new_address_params_assigned(&new_address_params, &mut remaining);
+    // No queue writes in this repro: avoid InsertIntoQueues
+let packed_new_address_params: Vec<light_sdk::address::NewAddressParamsAssignedPacked> = Vec::new();
 
-    // 2) Ensure state queue + state tree are present (idempotent if already inserted)
-    let state_queue_idx = pack_pubkey_usize(&state_queue_pk.into(), &mut remaining);
-    let state_tree_idx = pack_pubkey_usize(&state_tree_pk.into(), &mut remaining);
+    // 2) Ensure metas present and capture indices for RO address context
+let addr_tree_idx  = pack_pubkey_usize(&addr_tree_pk.into(),  &mut remaining);
+let state_queue_idx= pack_pubkey_usize(&state_queue_pk.into(), &mut remaining);
+let _ = pack_pubkey_usize(&state_tree_pk.into(),  &mut remaining);
 
     // 3) Convert map -> metas (sorted by index)
     let remaining_metas = to_account_metas(
@@ -150,19 +145,14 @@ async fn tree_height_or_account_info() {
     );
 
     // 4) Build one instruction payload and reuse it twice (DON'T rebuild after forging)
-    // Insert a read-only STATE input so the verifier picks up state_tree_height=32
-    let state_ro_account = PackedReadOnlyCompressedAccount {
-        account_hash: [0u8; 32],
-        merkle_context: PackedMerkleContext {
-            merkle_tree_pubkey_index: state_tree_idx,
-            queue_pubkey_index: state_queue_idx,
-            leaf_index: 0,
-            prove_by_index: false,
-        },
-        root_index: state_root_idx,
-    };
+// Insert a read-only ADDRESS input so the verifier picks up address_tree_height=40
+let ro_addr = PackedReadOnlyAddress {
+    address,
+    address_merkle_tree_root_index: addr_root_idx,
+    address_merkle_tree_account_index: addr_tree_idx as u8,
+};
 
-    let ix_data = InstructionDataInvokeCpiWithAccountInfo {
+let ix_data = InstructionDataInvokeCpiWithAccountInfo {
         mode: 0,
         bump: 255,
         invoking_program_id: create_address_test_program::ID.into(),
@@ -174,7 +164,7 @@ async fn tree_height_or_account_info() {
         proof: proof_with_context.proof.into(),
         new_address_params: packed_new_address_params,
         account_infos: vec![],
-        read_only_addresses: vec![],
+        read_only_addresses: vec![ro_addr],
         read_only_accounts: vec![],
     };
 
@@ -210,7 +200,7 @@ async fn tree_height_or_account_info() {
     eprintln!("send #1 => {:?}", res_before.as_ref().map(|_| "ok"));
     assert!(res_before.is_ok(), "baseline must succeed");
 
-   // ---- Forge only STATE height to 1 (AFTER first send) ----
+    // ---- Forge only STATE height to 1 (AFTER first send) ----
 let mut state_acc = rpc.get_account(state_tree_pk).await.unwrap().unwrap();
 let mut s: &[u8] = &state_acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
 let mut forged_meta = BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap();
@@ -232,9 +222,8 @@ let addr_meta2 = {
     BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap()
 };
 eprintln!("post-forge heights => state={}, addr={}", state_meta2.height, addr_meta2.height);
-assert_eq!(addr_meta2.height, DEFAULT_BATCH_ADDRESS_TREE_HEIGHT); // still 40
+assert_eq!(addr_meta2.height, DEFAULT_BATCH_ADDRESS_TREE_HEIGHT);
 assert_eq!(state_meta2.height, 1);
-
 
     eprintln!(
         "reusing same ix => len={}, checksum32=0x{:08x}",
@@ -251,8 +240,8 @@ assert_eq!(state_meta2.height, 1);
         None,
     )
     .await;
-    eprintln!("send #2 (after forging addr.height=1) => {:?}", res_after.as_ref().map(|_| "ok"));
-    assert!(res_after.is_ok(), "should pass after forging addr height due to OR check");
+    eprintln!("send #2 (after forging state.height=1) => {:?}", res_after.as_ref().map(|_| "ok"));
+    assert!(res_after.is_ok(), "should pass after forging state height due to OR check");
 
     eprintln!("result: OR guard likely PRESENT (accepted with state_height=32, addr_height=1)");
     eprintln!("==== END tree_height_or_account_info ====");
