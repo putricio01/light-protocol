@@ -20,6 +20,7 @@ use light_compressed_account::{
         data::pack_pubkey_usize,
         with_account_info::InstructionDataInvokeCpiWithAccountInfo,
     },
+    compressed_account::{PackedMerkleContext, PackedReadOnlyCompressedAccount},
     Pubkey as LcPubkey,
 };
 use light_compressed_token::process_transfer::transfer_sdk::to_account_metas;
@@ -28,7 +29,6 @@ use light_prover_client::prover::{spawn_prover, ProverConfig};
 use serial_test::serial;
 use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer};
 use light_program_test::Indexer;
-
 fn checksum32(data: &[u8]) -> u32 {
     data.iter().fold(0u32, |acc, &b| acc.wrapping_mul(16777619) ^ (b as u32))
 }
@@ -128,8 +128,8 @@ async fn tree_height_or_account_info() {
     let packed_new_address_params = pack_new_address_params_assigned(&new_address_params, &mut remaining);
 
     // 2) Ensure state queue + state tree are present (idempotent if already inserted)
-    let _ = pack_pubkey_usize(&state_queue_pk.into(), &mut remaining);
-    let _ = pack_pubkey_usize(&state_tree_pk.into(), &mut remaining);
+    let state_queue_idx = pack_pubkey_usize(&state_queue_pk.into(), &mut remaining);
+    let state_tree_idx = pack_pubkey_usize(&state_tree_pk.into(), &mut remaining);
 
     // 3) Convert map -> metas (sorted by index)
     let remaining_metas = to_account_metas(
@@ -150,6 +150,18 @@ async fn tree_height_or_account_info() {
     );
 
     // 4) Build one instruction payload and reuse it twice (DON'T rebuild after forging)
+    // Insert a read-only STATE input so the verifier picks up state_tree_height=32
+    let state_ro_account = PackedReadOnlyCompressedAccount {
+        account_hash: [0u8; 32],
+        merkle_context: PackedMerkleContext {
+            merkle_tree_pubkey_index: state_tree_idx,
+            queue_pubkey_index: state_queue_idx,
+            leaf_index: 0,
+            prove_by_index: false,
+        },
+        root_index: state_root_idx,
+    };
+
     let ix_data = InstructionDataInvokeCpiWithAccountInfo {
         mode: 0,
         bump: 255,
@@ -198,30 +210,31 @@ async fn tree_height_or_account_info() {
     eprintln!("send #1 => {:?}", res_before.as_ref().map(|_| "ok"));
     assert!(res_before.is_ok(), "baseline must succeed");
 
-    // ---- Forge only ADDRESS height to 1 (AFTER first send) ----
-    let mut addr_acc = rpc.get_account(addr_tree_pk).await.unwrap().unwrap();
-    let mut s: &[u8] = &addr_acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
-    let mut forged_meta = BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap();
-    forged_meta.height = 1;
-    let mut buf = Vec::new();
-    BatchedMerkleTreeMetadata::serialize(&forged_meta, &mut buf).unwrap();
-    addr_acc.data[8..8 + buf.len()].copy_from_slice(&buf);
-    rpc.set_account(addr_tree_pk, addr_acc);
+   // ---- Forge only STATE height to 1 (AFTER first send) ----
+let mut state_acc = rpc.get_account(state_tree_pk).await.unwrap().unwrap();
+let mut s: &[u8] = &state_acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
+let mut forged_meta = BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap();
+forged_meta.height = 1;
+let mut buf = Vec::new();
+BatchedMerkleTreeMetadata::serialize(&forged_meta, &mut buf).unwrap();
+state_acc.data[8..8 + buf.len()].copy_from_slice(&buf);
+rpc.set_account(state_tree_pk, state_acc);
 
-    // Sanity: confirm post-forge heights
-    let state_meta2 = {
-        let acc = rpc.get_account(state_tree_pk).await.unwrap().unwrap();
-        let mut s: &[u8] = &acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
-        BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap()
-    };
-    let addr_meta2 = {
-        let acc = rpc.get_account(addr_tree_pk).await.unwrap().unwrap();
-        let mut s: &[u8] = &acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
-        BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap()
-    };
-    eprintln!("post-forge heights => state={}, addr={}", state_meta2.height, addr_meta2.height);
-    assert_eq!(state_meta2.height, DEFAULT_BATCH_STATE_TREE_HEIGHT);
-    assert_eq!(addr_meta2.height, 1);
+// Sanity: confirm post-forge heights
+let state_meta2 = {
+    let acc = rpc.get_account(state_tree_pk).await.unwrap().unwrap();
+    let mut s: &[u8] = &acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
+    BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap()
+};
+let addr_meta2 = {
+    let acc = rpc.get_account(addr_tree_pk).await.unwrap().unwrap();
+    let mut s: &[u8] = &acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
+    BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap()
+};
+eprintln!("post-forge heights => state={}, addr={}", state_meta2.height, addr_meta2.height);
+assert_eq!(addr_meta2.height, DEFAULT_BATCH_ADDRESS_TREE_HEIGHT); // still 40
+assert_eq!(state_meta2.height, 1);
+
 
     eprintln!(
         "reusing same ix => len={}, checksum32=0x{:08x}",
