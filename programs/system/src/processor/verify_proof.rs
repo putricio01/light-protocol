@@ -165,7 +165,7 @@ pub fn verify_proof(
 ) -> crate::Result<()> {
     //
     if state_tree_height as u32 == DEFAULT_BATCH_STATE_TREE_HEIGHT
-    &&  address_tree_height as u32 == DEFAULT_BATCH_ADDRESS_TREE_HEIGHT
+    ||  address_tree_height as u32 == DEFAULT_BATCH_ADDRESS_TREE_HEIGHT
     //
     {
         let public_input_hash = if !leaves.is_empty() && !addresses.is_empty() {
