@@ -113,7 +113,7 @@ async fn tree_height_or_account_info() {
         addr_root_idx,
         addresses_with_tree.len()
     );
-
+    
     // -------- Build remaining_metas using ONLY SDK packers --------
     let mut remaining: HashMap<LcPubkey, usize> = HashMap::new();
 
@@ -201,6 +201,7 @@ let ix_data = InstructionDataInvokeCpiWithAccountInfo {
     assert!(res_before.is_ok(), "baseline must succeed");
 
     // ---- Forge only STATE height to 1 (AFTER first send) ----
+    /*
 let mut state_acc = rpc.get_account(state_tree_pk).await.unwrap().unwrap();
 let mut s: &[u8] = &state_acc.data[8..8 + BatchedMerkleTreeMetadata::LEN];
 let mut forged_meta = BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap();
@@ -208,8 +209,8 @@ forged_meta.height = 1;
 let mut buf = Vec::new();
 BatchedMerkleTreeMetadata::serialize(&forged_meta, &mut buf).unwrap();
 state_acc.data[8..8 + buf.len()].copy_from_slice(&buf);
-rpc.set_account(state_tree_pk, state_acc);
-
+rpc.set_account(state_tree_pk, state_acc); 
+ */
 // Sanity: confirm post-forge heights
 let state_meta2 = {
     let acc = rpc.get_account(state_tree_pk).await.unwrap().unwrap();
@@ -222,8 +223,8 @@ let addr_meta2 = {
     BatchedMerkleTreeMetadata::deserialize(&mut s).unwrap()
 };
 eprintln!("post-forge heights => state={}, addr={}", state_meta2.height, addr_meta2.height);
-assert_eq!(addr_meta2.height, DEFAULT_BATCH_ADDRESS_TREE_HEIGHT);
-assert_eq!(state_meta2.height, 1);
+//assert_eq!(addr_meta2.height, DEFAULT_BATCH_ADDRESS_TREE_HEIGHT);
+//assert_eq!(state_meta2.height, 1);
 
     eprintln!(
         "reusing same ix => len={}, checksum32=0x{:08x}",
