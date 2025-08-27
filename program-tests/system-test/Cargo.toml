@@ -42,3 +42,5 @@ serial_test = { workspace = true }
 light-batched-merkle-tree = { workspace = true }
 light-merkle-tree-metadata = { workspace = true, features = ["anchor"] }
 light-bloom-filter = { workspace = true }
+
+light-concurrent-merkle-tree = { workspace = true }

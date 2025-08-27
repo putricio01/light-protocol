@@ -3817,7 +3817,6 @@ dependencies = [
  "pinocchio",
  "rand 0.8.5",
  "solana-program-error",
- "thiserror 2.0.12",
  "zerocopy",
 ]
 
@@ -5457,6 +5456,7 @@ dependencies = [
  "light-program-test",
  "light-sdk",
  "light-sdk-types",
+ "light-zero-copy",
  "solana-program",
  "solana-sdk",
  "tokio",
@@ -9080,6 +9080,7 @@ dependencies = [
  "light-bloom-filter",
  "light-client",
  "light-compressed-account",
+ "light-concurrent-merkle-tree",
  "light-hasher",
  "light-merkle-tree-metadata",
  "light-program-test",
