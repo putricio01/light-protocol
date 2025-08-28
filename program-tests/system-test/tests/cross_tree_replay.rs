@@ -322,20 +322,10 @@ async fn replay_proof_on_tree_b() {
     // `BatchAppend` CPI finds the (tree_pubkey, forester_program) PDA.
     let forester_program = Keypair::new();
 
-    register_program_with_registry_program(
-        &mut rpc,
-        &payer,
-        &tree_a.pubkey(),
-        &forester_program,
-    ).await.unwrap();
-    
-    register_program_with_registry_program(
-        &mut rpc,
-        &payer,
-        &tree_b.pubkey(),
-        &forester_program,
-    ).await.unwrap();
-
+    let group_a = get_group_pda(tree_a.pubkey());
+    let group_b = get_group_pda(tree_b.pubkey());
+    register_program_with_registry_program(&mut rpc, &payer, &group_a, &forester_program).await.unwrap();
+    register_program_with_registry_program(&mut rpc, &payer, &group_b, &forester_program).await.unwrap();
     // Generate append proof for Tree A
     let mut mock_indexer = MockBatchedForester::<32>::default();
     let (bundle, old_root, _leaves_hash_chain, _start_index) = generate_proof_for_tree_a(
