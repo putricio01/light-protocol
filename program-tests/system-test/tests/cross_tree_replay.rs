@@ -15,24 +15,23 @@ use light_compressed_account::{
     pubkey::Pubkey as CompressedPubkey,
 };
 
-use account_compression::instructions::register_program::RegisteredProgram;
 use anchor_lang::AnchorSerialize;
-use light_program_test::utils::assert::assert_rpc_error;
 use light_program_test::{
-    accounts::{initialize::get_group_pda, state_tree_v2::create_batched_state_merkle_tree},
+    accounts::{
+        initialize::{get_group_pda, initialize_new_group},
+        state_tree_v2::create_batched_state_merkle_tree,
+    },
     program_test::LightProgramTest,
     ProgramTestConfig, Rpc,
 };
 use light_registry::{
     account_compression_cpi::sdk::create_batch_append_instruction,
-    sdk::create_register_program_instruction,
-    utils::{get_cpi_authority_pda, get_protocol_config_pda_address},
+    utils::get_cpi_authority_pda,
 };
 use light_test_utils::{
     mock_batched_forester::{MockBatchedForester, MockTxEvent},
     RpcError,
 };
-use solana_sdk::system_instruction;
 use solana_sdk::{
     account::WritableAccount,
     instruction::{AccountMeta, Instruction},
@@ -302,6 +301,11 @@ async fn replay_proof_on_tree_b() {
     .await
     .unwrap();
 
+    // Initialize group authority for Tree A so it can register programs.
+    initialize_new_group(&tree_a, &payer, &mut rpc, get_cpi_authority_pda().0)
+        .await
+        .unwrap();
+
     // Create second batched state merkle tree (Tree B) with its own context
     let tree_b = Keypair::new();
     let queue_b = Keypair::new();
@@ -317,6 +321,11 @@ async fn replay_proof_on_tree_b() {
     )
     .await
     .unwrap();
+
+    // Initialize group authority for Tree B as well.
+    initialize_new_group(&tree_b, &payer, &mut rpc, get_cpi_authority_pda().0)
+        .await
+        .unwrap();
 
     // Register the same forester program on both trees so that the
     // `BatchAppend` CPI finds the (tree_pubkey, forester_program) PDA.
