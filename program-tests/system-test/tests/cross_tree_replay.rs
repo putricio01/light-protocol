@@ -23,6 +23,7 @@ use light_test_utils::{
     mock_batched_forester::{MockBatchedForester, MockTxEvent},
     RpcError,
 };
+use light_program_test::utils::assert::assert_rpc_error;
 use light_registry::account_compression_cpi::sdk::create_batch_append_instruction;
 use anchor_lang::AnchorSerialize;
 use solana_sdk::{
@@ -44,14 +45,14 @@ async fn init_two_batched_trees() {
     // Create first batched state merkle tree (Tree A)
     let tree_a = Keypair::new();
     let queue_a = Keypair::new();
-    let cpi_a = Keypair::new();
+    let cpi = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_a,
         &queue_a,
-        &cpi_a,
+        &cpi,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
@@ -60,14 +61,13 @@ async fn init_two_batched_trees() {
     // Create second batched state merkle tree (Tree B)
     let tree_b = Keypair::new();
     let queue_b = Keypair::new();
-    let cpi_b = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_b,
         &queue_b,
-        &cpi_b,
+        &cpi,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
@@ -276,20 +276,111 @@ async fn replay_proof_on_tree_b() {
     // Create first batched state merkle tree (Tree A)
     let tree_a = Keypair::new();
     let queue_a = Keypair::new();
-    let cpi_a = Keypair::new();
+    let cpi = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_a,
         &queue_a,
-        &cpi_a,
+        &cpi,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
     .unwrap();
 
     // Create second batched state merkle tree (Tree B)
+    let tree_b = Keypair::new();
+    let queue_b = Keypair::new();
+    create_batched_state_merkle_tree(
+        &payer,
+        false,
+        &mut rpc,
+        &tree_b,
+        &queue_b,
+        &cpi,
+        InitStateTreeAccountsInstructionData::test_default(),
+    )
+    .await
+    .unwrap();
+
+    // Generate append proof for Tree A
+    let mut mock_indexer = MockBatchedForester::<32>::default();
+    let (bundle, old_root, _leaves_hash_chain, _start_index) = generate_proof_for_tree_a(
+        tree_a.pubkey(),
+        queue_a.pubkey(),
+        &mut rpc,
+        &mut mock_indexer,
+    )
+    .await;
+
+    // Both trees start from the same deterministic root at genesis.
+    // Without mirroring leaves into Tree B, its root should still equal
+    // the old_root used for Tree A's proof.
+    let account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
+    let mut data_b = account_b.data.clone();
+    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
+        data_b.as_mut_slice(),
+        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
+    )
+    .unwrap();
+    assert_eq!(mt_b.get_root().unwrap(), old_root);
+
+    // Craft BatchAppend instruction for Tree B using Tree A's proof
+    // registered_forester_pda seeds are (tree_pubkey, forester_program); by
+    // creating both trees with the same `cpi` forester we satisfy the on-chain
+    // check. The proof's public inputs exclude the tree id, hashing only the
+    // old root, new root, leaves hash chain and start index, so this proof is
+    // valid for any tree in the same state.
+    let ix = create_batch_append_instruction(
+        payer.pubkey(),
+        payer.pubkey(),
+        tree_b.pubkey(),
+        queue_b.pubkey(),
+        0,
+        bundle.try_to_vec().unwrap(),
+    );
+
+    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer])
+        .await
+        .unwrap();
+
+    // Fetch Tree B after append and verify root updated to new root from the proof.
+    let account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
+    let mut data_b = account_b.data.clone();
+    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
+        data_b.as_mut_slice(),
+        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
+    )
+    .unwrap();
+    assert_eq!(mt_b.get_root().unwrap(), bundle.new_root);
+}
+
+#[tokio::test]
+async fn replay_proof_on_tree_b_unregistered_forester_fails() {
+    // Spin up a LightProgramTest context
+    let mut rpc = LightProgramTest::new(ProgramTestConfig::new(false, None))
+        .await
+        .unwrap();
+    let payer = rpc.get_payer().insecure_clone();
+
+    // Tree A and proof generator use `cpi`
+    let tree_a = Keypair::new();
+    let queue_a = Keypair::new();
+    let cpi = Keypair::new();
+    create_batched_state_merkle_tree(
+        &payer,
+        false,
+        &mut rpc,
+        &tree_a,
+        &queue_a,
+        &cpi,
+        InitStateTreeAccountsInstructionData::test_default(),
+    )
+    .await
+    .unwrap();
+
+    // Tree B is initialized with a different forester and never registers `cpi`
     let tree_b = Keypair::new();
     let queue_b = Keypair::new();
     let cpi_b = Keypair::new();
@@ -307,7 +398,7 @@ async fn replay_proof_on_tree_b() {
 
     // Generate append proof for Tree A
     let mut mock_indexer = MockBatchedForester::<32>::default();
-    let (bundle, old_root, _leaves_hash_chain, _start_index) = generate_proof_for_tree_a(
+    let (bundle, _old_root, _leaves_hash_chain, _start_index) = generate_proof_for_tree_a(
         tree_a.pubkey(),
         queue_a.pubkey(),
         &mut rpc,
@@ -315,31 +406,7 @@ async fn replay_proof_on_tree_b() {
     )
     .await;
 
-    // Mirror the same leaves into Tree B's output queue
-    let mut counter = 0u32;
-    let mut dummy_indexer = MockBatchedForester::<32>::default();
-    perform_insert_into_output_queue(
-        &mut rpc,
-        &mut dummy_indexer,
-        queue_b.pubkey(),
-        &payer,
-        &mut counter,
-        10,
-    )
-    .await
-    .unwrap();
-
-    // Ensure Tree B still has the old root
-    let mut account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
-    let mut data_b = account_b.data.clone();
-    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
-        data_b.as_mut_slice(),
-        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
-    )
-    .unwrap();
-    assert_eq!(mt_b.get_root().unwrap(), old_root);
-
-    // Craft BatchAppend instruction for Tree B using Tree A's proof
+    // Attempt to replay proof on Tree B which doesn't have the `cpi` forester registered
     let ix = create_batch_append_instruction(
         payer.pubkey(),
         payer.pubkey(),
@@ -349,17 +416,14 @@ async fn replay_proof_on_tree_b() {
         bundle.try_to_vec().unwrap(),
     );
 
-    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer])
-        .await
-        .unwrap();
+    let result = rpc
+        .create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer])
+        .await;
 
-    // Fetch Tree B after append and verify root updated
-    let mut account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
-    let mut data_b = account_b.data.clone();
-    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
-        data_b.as_mut_slice(),
-        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
+    assert_rpc_error(
+        result,
+        0,
+        anchor_lang::error::ErrorCode::AccountNotInitialized.into(),
     )
     .unwrap();
-    assert_eq!(mt_b.get_root().unwrap(), bundle.new_root);
 }
