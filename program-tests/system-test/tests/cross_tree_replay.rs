@@ -1,7 +1,7 @@
 #![cfg(feature = "test-sbf")]
 
-use account_compression::ID;
 use account_compression::processor::initialize_address_merkle_tree::ToAccountMetas;
+use account_compression::ID;
 use anchor_lang::InstructionData;
 use light_batched_merkle_tree::{
     initialize_state_tree::InitStateTreeAccountsInstructionData,
@@ -15,24 +15,30 @@ use light_compressed_account::{
     pubkey::Pubkey as CompressedPubkey,
 };
 
+use account_compression::instructions::register_program::RegisteredProgram;
+use anchor_lang::AnchorSerialize;
+use light_program_test::utils::assert::assert_rpc_error;
 use light_program_test::{
-    accounts::state_tree_v2::create_batched_state_merkle_tree, program_test::LightProgramTest,
+    accounts::{initialize::get_group_pda, state_tree_v2::create_batched_state_merkle_tree},
+    program_test::LightProgramTest,
     ProgramTestConfig, Rpc,
+};
+use light_registry::{
+    account_compression_cpi::sdk::create_batch_append_instruction,
+    sdk::create_register_program_instruction,
+    utils::{get_cpi_authority_pda, get_protocol_config_pda_address},
 };
 use light_test_utils::{
     mock_batched_forester::{MockBatchedForester, MockTxEvent},
     RpcError,
 };
-use light_program_test::utils::assert::assert_rpc_error;
-use light_registry::account_compression_cpi::sdk::create_batch_append_instruction;
-use anchor_lang::AnchorSerialize;
+use solana_sdk::system_instruction;
 use solana_sdk::{
+    account::WritableAccount,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
-    account::WritableAccount,
 };
-
 
 #[tokio::test]
 async fn init_two_batched_trees() {
@@ -45,29 +51,34 @@ async fn init_two_batched_trees() {
     // Create first batched state merkle tree (Tree A)
     let tree_a = Keypair::new();
     let queue_a = Keypair::new();
-    let cpi = Keypair::new();
+    // Each tree must use a unique CPI context account. Reusing the same
+    // keypair would result in the second `create_account` call attempting to
+    // re-initialize an existing account.
+    let ctx_a = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_a,
         &queue_a,
-        &cpi,
+        &ctx_a,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
     .unwrap();
 
-    // Create second batched state merkle tree (Tree B)
+    // Create second batched state merkle tree (Tree B) with its own context
+    // account to avoid duplicate account creation.
     let tree_b = Keypair::new();
     let queue_b = Keypair::new();
+    let ctx_b = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_b,
         &queue_b,
-        &cpi,
+        &ctx_b,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
@@ -276,33 +287,67 @@ async fn replay_proof_on_tree_b() {
     // Create first batched state merkle tree (Tree A)
     let tree_a = Keypair::new();
     let queue_a = Keypair::new();
-    let cpi = Keypair::new();
+    // Separate CPI context for Tree A
+    let ctx_a = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_a,
         &queue_a,
-        &cpi,
+        &ctx_a,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
     .unwrap();
 
-    // Create second batched state merkle tree (Tree B)
+    // Create second batched state merkle tree (Tree B) with its own context
     let tree_b = Keypair::new();
     let queue_b = Keypair::new();
+    let ctx_b = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_b,
         &queue_b,
-        &cpi,
+        &ctx_b,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
     .unwrap();
+
+    // Register the same forester program on both trees so that the
+    // `BatchAppend` CPI finds the (tree_pubkey, forester_program) PDA.
+    let forester_program_id = payer.pubkey();
+    let protocol_pda = get_protocol_config_pda_address();
+    let group_a = get_group_pda(tree_a.pubkey());
+    let (ix_a, _) = create_register_program_instruction(
+        payer.pubkey(),
+        protocol_pda,
+        group_a,
+        forester_program_id,
+    );
+    let cpi_authority_pda = get_cpi_authority_pda();
+    let rent = rpc
+        .get_minimum_balance_for_rent_exemption(RegisteredProgram::LEN)
+        .await
+        .unwrap();
+    let transfer_a = system_instruction::transfer(&payer.pubkey(), &cpi_authority_pda.0, rent);
+    rpc.create_and_send_transaction(&[transfer_a, ix_a], &payer.pubkey(), &[&payer])
+        .await
+        .unwrap();
+    let group_b = get_group_pda(tree_b.pubkey());
+    let (ix_b, _) = create_register_program_instruction(
+        payer.pubkey(),
+        protocol_pda,
+        group_b,
+        forester_program_id,
+    );
+    let transfer_b = system_instruction::transfer(&payer.pubkey(), &cpi_authority_pda.0, rent);
+    rpc.create_and_send_transaction(&[transfer_b, ix_b], &payer.pubkey(), &[&payer])
+        .await
+        .unwrap();
 
     // Generate append proof for Tree A
     let mut mock_indexer = MockBatchedForester::<32>::default();
@@ -326,15 +371,14 @@ async fn replay_proof_on_tree_b() {
     .unwrap();
     assert_eq!(mt_b.get_root().unwrap(), old_root);
 
-    // Craft BatchAppend instruction for Tree B using Tree A's proof
-    // registered_forester_pda seeds are (tree_pubkey, forester_program); by
-    // creating both trees with the same `cpi` forester we satisfy the on-chain
-    // check. The proof's public inputs exclude the tree id, hashing only the
-    // old root, new root, leaves hash chain and start index, so this proof is
-    // valid for any tree in the same state.
+    // Craft BatchAppend instruction for Tree B using Tree A's proof. The proof
+    // hashes only the old root, new root, leaves hash chain and start index,
+    // so it is valid for any tree sharing the same state. Passing the
+    // previously registered `forester_program_id` satisfies the on-chain PDA
+    // check.
     let ix = create_batch_append_instruction(
         payer.pubkey(),
-        payer.pubkey(),
+        forester_program_id,
         tree_b.pubkey(),
         queue_b.pubkey(),
         0,
@@ -364,37 +408,58 @@ async fn replay_proof_on_tree_b_unregistered_forester_fails() {
         .unwrap();
     let payer = rpc.get_payer().insecure_clone();
 
-    // Tree A and proof generator use `cpi`
+    // Tree A and proof generator use `ctx_a`
     let tree_a = Keypair::new();
     let queue_a = Keypair::new();
-    let cpi = Keypair::new();
+    let ctx_a = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_a,
         &queue_a,
-        &cpi,
+        &ctx_a,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
     .unwrap();
 
-    // Tree B is initialized with a different forester and never registers `cpi`
+    // Tree B is initialized with a different forester context and never
+    // registers `ctx_a`
     let tree_b = Keypair::new();
     let queue_b = Keypair::new();
-    let cpi_b = Keypair::new();
+    let ctx_b = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
         false,
         &mut rpc,
         &tree_b,
         &queue_b,
-        &cpi_b,
+        &ctx_b,
         InitStateTreeAccountsInstructionData::test_default(),
     )
     .await
     .unwrap();
+
+    // Only Tree A registers the forester program; Tree B remains unregistered.
+    let forester_program_id = payer.pubkey();
+    let protocol_pda = get_protocol_config_pda_address();
+    let group_a = get_group_pda(tree_a.pubkey());
+    let (ix_a, _) = create_register_program_instruction(
+        payer.pubkey(),
+        protocol_pda,
+        group_a,
+        forester_program_id,
+    );
+    let cpi_authority_pda = get_cpi_authority_pda();
+    let rent = rpc
+        .get_minimum_balance_for_rent_exemption(RegisteredProgram::LEN)
+        .await
+        .unwrap();
+    let transfer_a = system_instruction::transfer(&payer.pubkey(), &cpi_authority_pda.0, rent);
+    rpc.create_and_send_transaction(&[transfer_a, ix_a], &payer.pubkey(), &[&payer])
+        .await
+        .unwrap();
 
     // Generate append proof for Tree A
     let mut mock_indexer = MockBatchedForester::<32>::default();
@@ -409,7 +474,7 @@ async fn replay_proof_on_tree_b_unregistered_forester_fails() {
     // Attempt to replay proof on Tree B which doesn't have the `cpi` forester registered
     let ix = create_batch_append_instruction(
         payer.pubkey(),
-        payer.pubkey(),
+        forester_program_id,
         tree_b.pubkey(),
         queue_b.pubkey(),
         0,
