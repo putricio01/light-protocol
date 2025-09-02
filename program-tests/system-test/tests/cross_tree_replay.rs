@@ -288,6 +288,7 @@ async fn replay_proof_on_tree_b() {
         .await
         .unwrap();
     let payer = rpc.get_payer().insecure_clone();
+    
 
     // Create first batched state merkle tree (Tree A)
     let tree_a = Keypair::new();
@@ -343,6 +344,10 @@ async fn replay_proof_on_tree_b() {
         .insecure_clone();
 
     let group_b = get_group_pda(tree_b.pubkey());
+
+    use solana_sdk::system_instruction;
+
+
     
     register_program_with_registry_program(&mut rpc, &gov, &group_b, &forester_program)
         .await
@@ -367,7 +372,7 @@ async fn replay_proof_on_tree_b() {
     );
     rpc.create_and_send_transaction(
         &[reg_forester_ix, reg_epoch_ix, finalize_ix],
-        &gov.pubkey(),
+        &gov.pubkey(), 
         &[&gov],
     )
     .await
