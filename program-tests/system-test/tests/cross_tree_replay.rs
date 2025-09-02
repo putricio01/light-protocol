@@ -368,7 +368,7 @@ async fn replay_proof_on_tree_b() {
     rpc.create_and_send_transaction(
         &[reg_forester_ix, reg_epoch_ix, finalize_ix],
         &gov.pubkey(),
-        &[&gov, &forester_program],
+        &[&gov],
     )
     .await
     .unwrap();
