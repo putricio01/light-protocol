@@ -16,6 +16,7 @@ use light_compressed_account::{
 };
 
 use anchor_lang::AnchorSerialize;
+use light_program_test::accounts::register_program::register_program_with_registry_program;
 use light_program_test::{
     accounts::{
         initialize::{get_group_pda, initialize_new_group},
@@ -26,7 +27,12 @@ use light_program_test::{
 };
 use light_registry::{
     account_compression_cpi::sdk::create_batch_append_instruction,
+    sdk::{
+        create_finalize_registration_instruction, create_register_forester_epoch_pda_instruction,
+        create_register_forester_instruction,
+    },
     utils::get_cpi_authority_pda,
+    ForesterConfig,
 };
 use light_test_utils::{
     mock_batched_forester::{MockBatchedForester, MockTxEvent},
@@ -38,7 +44,6 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
 };
-use light_program_test::accounts::register_program::register_program_with_registry_program;
 
 #[tokio::test]
 async fn init_two_batched_trees() {
@@ -327,20 +332,47 @@ async fn replay_proof_on_tree_b() {
         .await
         .unwrap();
 
-    // Register the same forester program on both trees so that the
-    // `BatchAppend` CPI finds the (tree_pubkey, forester_program) PDA.
+    // Register the forester program only for Tree B so that the `BatchAppend` CPI
+    // finds the (tree_pubkey, forester_program) PDA.
     let forester_program = Keypair::new();
 
     let gov = rpc
-    .test_accounts()
-    .protocol
-    .governance_authority
-    .insecure_clone(); // Keypair
+        .test_accounts()
+        .protocol
+        .governance_authority
+        .insecure_clone();
 
-    //let group_a = get_group_pda(tree_a.pubkey());
     let group_b = get_group_pda(tree_b.pubkey());
-    //register_program_with_registry_program(&mut rpc, &gov, &group_a, &forester_program).await.unwrap();
-    register_program_with_registry_program(&mut rpc, &gov, &group_b, &forester_program).await.unwrap();
+    
+    register_program_with_registry_program(&mut rpc, &gov, &group_b, &forester_program)
+        .await
+        .unwrap(); 
+
+    // Register and finalise the forester for epoch 0.
+    let reg_forester_ix = create_register_forester_instruction(
+        &gov.pubkey(),
+        &gov.pubkey(),
+        &forester_program.pubkey(),
+        ForesterConfig::default(),
+    );
+    let reg_epoch_ix = create_register_forester_epoch_pda_instruction(
+        &gov.pubkey(),
+        &forester_program.pubkey(),
+        0,
+    );
+    let finalize_ix = create_finalize_registration_instruction(
+        &gov.pubkey(),
+        &forester_program.pubkey(),
+        0,
+    );
+    rpc.create_and_send_transaction(
+        &[reg_forester_ix, reg_epoch_ix, finalize_ix],
+        &gov.pubkey(),
+        &[&gov, &forester_program],
+    )
+    .await
+    .unwrap();
+
     // Generate append proof for Tree A
     let mut mock_indexer = MockBatchedForester::<32>::default();
     let (bundle, old_root, _leaves_hash_chain, _start_index) = generate_proof_for_tree_a(
