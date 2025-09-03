@@ -318,7 +318,7 @@ async fn replay_proof_on_tree_b() {
     let ctx_b = Keypair::new();
     create_batched_state_merkle_tree(
         &payer,
-        false,
+        true,
         &mut rpc,
         &tree_b,
         &queue_b,
