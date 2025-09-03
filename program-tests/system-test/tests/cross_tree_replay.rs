@@ -289,7 +289,7 @@ async fn replay_proof_on_tree_b() {
         .unwrap();
     let payer = rpc.get_payer().insecure_clone();
 
-    // Create first batched state Merkle tree (Tree A)
+    // Create first batched state merkle tree (Tree A)
     let tree_a = Keypair::new();
     let queue_a = Keypair::new();
     let ctx_a = Keypair::new();
@@ -302,9 +302,10 @@ async fn replay_proof_on_tree_b() {
         &ctx_a,
         InitStateTreeAccountsInstructionData::test_default(),
     ).await.unwrap();
-    initialize_new_group(&tree_a, &payer, &mut rpc, get_cpi_authority_pda().0).await.unwrap();
+    initialize_new_group(&tree_a, &payer, &mut rpc, get_cpi_authority_pda().0)
+        .await.unwrap();
 
-    // Create second batched state Merkle tree (Tree B) with its own context and auto‑register
+    // Create second batched state merkle tree (Tree B) with auto‑register
     let tree_b = Keypair::new();
     let queue_b = Keypair::new();
     let ctx_b = Keypair::new();
@@ -317,41 +318,48 @@ async fn replay_proof_on_tree_b() {
         &ctx_b,
         InitStateTreeAccountsInstructionData::test_default(),
     ).await.unwrap();
-    initialize_new_group(&tree_b, &payer, &mut rpc, get_cpi_authority_pda().0).await.unwrap();
+    initialize_new_group(&tree_b, &payer, &mut rpc, get_cpi_authority_pda().0)
+        .await.unwrap();
 
-    // Register the forester program only for Tree B
+    // Prepare forester and governance authority
     let forester_program = Keypair::new();
     let gov = rpc.test_accounts().protocol.governance_authority.insecure_clone();
     let group_b = get_group_pda(tree_b.pubkey());
+
+    // Register the forester program only on Tree B’s group
     register_program_with_registry_program(&mut rpc, &gov, &group_b, &forester_program)
         .await.unwrap();
 
-    // Use gov as authority for all forester PDA operations; forester_program is just the seed
+    // Fund the forester so it can pay rent for the epoch PDA
+    rpc.airdrop_lamports(&forester_program.pubkey(), 300_000_000)
+        .await.unwrap();
+
+    // Register the forester PDA and epoch PDA using the forester as authority
     let reg_forester_ix = create_register_forester_instruction(
-        &gov.pubkey(),     // fee payer
-        &gov.pubkey(),     // authority (governance authority)
-        &forester_program.pubkey(),  // derivation seed (forester key)
+        &gov.pubkey(),            // fee payer
+        &gov.pubkey(),            // governance authority
+        &forester_program.pubkey(), // forester authority (derivation)
         ForesterConfig::default(),
     );
     let reg_epoch_ix = create_register_forester_epoch_pda_instruction(
-        &gov.pubkey(),     // authority = gov
-        &forester_program.pubkey(),  // derivation seed = forester key
-        0,                 // epoch 0
+        &forester_program.pubkey(), // authority = forester
+        &forester_program.pubkey(), // derivation = forester
+        0,
     );
     let finalize_ix = create_finalize_registration_instruction(
-        &gov.pubkey(),     // authority = gov
-        &forester_program.pubkey(),  // derivation seed = forester key
+        &forester_program.pubkey(), // authority = forester
+        &forester_program.pubkey(), // derivation = forester
         0,
     );
 
-    // Register the forester and epoch: only gov needs to sign
+    // Send register + epoch in one transaction signed by gov and forester
     rpc.create_and_send_transaction(
         &[reg_forester_ix, reg_epoch_ix],
         &gov.pubkey(),
-        &[&gov],
+        &[&gov, &forester_program],
     ).await.unwrap();
 
-    // Warp past the registration phase and finalise the forester for epoch 0
+    // Warp past the registration phase then finalize the forester for epoch 0
     let protocol_cfg = &rpc.config.protocol_config;
     let genesis_slot = protocol_cfg.genesis_slot;
     let registration_phase_length = protocol_cfg.registration_phase_length;
@@ -359,10 +367,10 @@ async fn replay_proof_on_tree_b() {
     rpc.create_and_send_transaction(
         &[finalize_ix],
         &gov.pubkey(),
-        &[&gov],
+        &[&gov, &forester_program],
     ).await.unwrap();
 
-    // Generate append proof for Tree A
+    // Generate a batch‑append proof for Tree A
     let mut mock_indexer = MockBatchedForester::<32>::default();
     let (bundle, old_root, _leaves_hash_chain, _start_index) = generate_proof_for_tree_a(
         tree_a.pubkey(),
@@ -371,16 +379,16 @@ async fn replay_proof_on_tree_b() {
         &mut mock_indexer,
     ).await;
 
-    // Verify Tree B is still at the same old root at genesis
+    // Confirm Tree B is still at the same old root
     let account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
-let mut data_b = account_b.data.clone();  // clone into a local variable
-let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
-    &mut data_b,
-    &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
-).unwrap();
-assert_eq!(mt_b.get_root().unwrap(), old_root);
+    let mut data_b = account_b.data.clone();  // avoid temporary drop
+    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
+        &mut data_b,
+        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
+    ).unwrap();
+    assert_eq!(mt_b.get_root().unwrap(), old_root);
 
-    // Mirror leaves into Tree B’s queue (using payer authority)
+    // Mirror the leaves into Tree B’s queue using payer as authority
     let mut counter_b = 0u32;
     perform_insert_into_output_queue(
         &mut rpc,
@@ -391,27 +399,29 @@ assert_eq!(mt_b.get_root().unwrap(), old_root);
         10,
     ).await.unwrap();
 
-    // Build BatchAppend for Tree B using Tree A’s proof; forester_program signs
+    // Build the BatchAppend instruction using the forester program as authority
     let ix = create_batch_append_instruction(
         forester_program.pubkey(),  // authority = forester
-        forester_program.pubkey(),  // derivation seed = forester
+        forester_program.pubkey(),  // derivation = forester
         tree_b.pubkey(),
         queue_b.pubkey(),
         0,
         bundle.try_to_vec().unwrap(),
     );
+
+    // Send the append tx: payer covers fees, forester signs for authority
     rpc.create_and_send_transaction(
         &[ix],
-        &payer.pubkey(),   // fee payer
-        &[&payer, &forester_program], // signers: payer (for fee) and forester (authority)
+        &payer.pubkey(),
+        &[&payer, &forester_program],
     ).await.unwrap();
 
-    // Verify Tree B’s root was updated to the new root from the proof
+    // Verify Tree B’s root is updated to bundle.new_root
     let account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
-let mut data_b = account_b.data.clone();
-let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
-    &mut data_b,
-    &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
-).unwrap();
-assert_eq!(mt_b.get_root().unwrap(), bundle.new_root);
+    let mut data_b = account_b.data.clone();
+    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
+        &mut data_b,
+        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
+    ).unwrap();
+    assert_eq!(mt_b.get_root().unwrap(), bundle.new_root);
 }
