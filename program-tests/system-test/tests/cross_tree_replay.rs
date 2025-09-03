@@ -348,7 +348,6 @@ async fn replay_proof_on_tree_b() {
     use solana_sdk::system_instruction;
 
 
-    
     register_program_with_registry_program(&mut rpc, &gov, &group_b, &forester_program)
         .await
         .unwrap(); 
@@ -361,21 +360,20 @@ async fn replay_proof_on_tree_b() {
         ForesterConfig::default(),
     );
     let reg_epoch_ix = create_register_forester_epoch_pda_instruction(
-        &gov.pubkey(),
         &forester_program.pubkey(),
+        &gov.pubkey(),
         0,
     );
     let finalize_ix = create_finalize_registration_instruction(
-        &gov.pubkey(),
         &forester_program.pubkey(),
+        &gov.pubkey(),
         0,
     );
     rpc.create_and_send_transaction(
         &[reg_forester_ix, reg_epoch_ix, finalize_ix],
         &gov.pubkey(), 
-        &[&gov],
-    )
-    .await
+        &[&gov, &forester_program],
+    ).await
     .unwrap();
 
     // Generate append proof for Tree A
