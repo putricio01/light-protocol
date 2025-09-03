@@ -366,7 +366,7 @@ async fn replay_proof_on_tree_b() {
     );
     let finalize_ix = create_finalize_registration_instruction(
         &forester_program.pubkey(),
-        &gov.pubkey(),
+        &forester_program.pubkey(),
         0,
     );
     rpc.create_and_send_transaction(
