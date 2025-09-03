@@ -361,7 +361,7 @@ async fn replay_proof_on_tree_b() {
     );
     let reg_epoch_ix = create_register_forester_epoch_pda_instruction(
         &forester_program.pubkey(),
-        &gov.pubkey(),
+        &forester_program.pubkey(),
         0,
     );
     let finalize_ix = create_finalize_registration_instruction(
