@@ -346,7 +346,7 @@ async fn replay_proof_on_tree_b() {
     let group_b = get_group_pda(tree_b.pubkey());
 
     use solana_sdk::system_instruction;
-
+    rpc.airdrop_lamports(&forester_program.pubkey(), 300_000_000).await.unwrap();
 
     register_program_with_registry_program(&mut rpc, &gov, &group_b, &forester_program)
         .await
