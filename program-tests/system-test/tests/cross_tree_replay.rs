@@ -17,6 +17,7 @@ use light_compressed_account::{
 
 use anchor_lang::AnchorSerialize;
 use light_program_test::accounts::register_program::register_program_with_registry_program;
+use light_program_test::program_test::TestRpc;
 use light_program_test::{
     accounts::{
         initialize::{get_group_pda, initialize_new_group},
@@ -44,7 +45,6 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
 };
-use light_program_test::program_test::TestRpc;
 
 #[tokio::test]
 async fn init_two_batched_trees() {
@@ -289,7 +289,6 @@ async fn replay_proof_on_tree_b() {
         .await
         .unwrap();
     let payer = rpc.get_payer().insecure_clone();
-    
 
     // Create first batched state merkle tree (Tree A)
     let tree_a = Keypair::new();
@@ -346,12 +345,13 @@ async fn replay_proof_on_tree_b() {
 
     let group_b = get_group_pda(tree_b.pubkey());
 
-    use solana_sdk::system_instruction;
-    rpc.airdrop_lamports(&forester_program.pubkey(), 300_000_000).await.unwrap();
+    rpc.airdrop_lamports(&forester_program.pubkey(), 300_000_000)
+        .await
+        .unwrap();
 
     register_program_with_registry_program(&mut rpc, &gov, &group_b, &forester_program)
         .await
-        .unwrap(); 
+        .unwrap();
 
     // Register and finalise the forester for epoch 0.
     let reg_forester_ix = create_register_forester_instruction(
@@ -370,27 +370,25 @@ async fn replay_proof_on_tree_b() {
         &forester_program.pubkey(),
         0,
     );
-    
+
     rpc.create_and_send_transaction(
         &[reg_forester_ix, reg_epoch_ix],
-        &gov.pubkey(), 
+        &gov.pubkey(),
         &[&gov, &forester_program],
-    ).await
+    )
+    .await
     .unwrap();
 
     let protocol_cfg = &rpc.config.protocol_config;
     let genesis_slot = protocol_cfg.genesis_slot;
     let registration_phase_length = protocol_cfg.registration_phase_length;
 
-    rpc.warp_to_slot(genesis_slot + registration_phase_length + 1).unwrap();
-    
+    rpc.warp_to_slot(genesis_slot + registration_phase_length + 1)
+        .unwrap();
 
-    rpc.create_and_send_transaction(
-        &[finalize_ix],
-        &gov.pubkey(), 
-        &[&gov, &forester_program],
-    ).await
-    .unwrap();
+    rpc.create_and_send_transaction(&[finalize_ix], &gov.pubkey(), &[&gov, &forester_program])
+        .await
+        .unwrap();
 
     // Generate append proof for Tree A
     let mut mock_indexer = MockBatchedForester::<32>::default();
@@ -416,11 +414,10 @@ async fn replay_proof_on_tree_b() {
 
     // Craft BatchAppend instruction for Tree B using Tree A's proof. The proof
     // hashes only the old root, new root, leaves hash chain and start index,
-    // so it is valid for any tree sharing the same state. Passing the
-    // previously registered `forester_program_id` satisfies the on-chain PDA
-    // check.
+    // so it is valid for any tree sharing the same state. The forester
+    // program's key is provided to satisfy the on-chain PDA authority check.
     let ix = create_batch_append_instruction(
-        payer.pubkey(),
+        forester_program.pubkey(),
         forester_program.pubkey(),
         tree_b.pubkey(),
         queue_b.pubkey(),
@@ -428,7 +425,7 @@ async fn replay_proof_on_tree_b() {
         bundle.try_to_vec().unwrap(),
     );
 
-    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer])
+    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer, &forester_program])
         .await
         .unwrap();
 
