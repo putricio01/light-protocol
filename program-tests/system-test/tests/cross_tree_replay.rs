@@ -383,7 +383,7 @@ async fn replay_proof_on_tree_b() {
     let registration_phase_length = protocol_cfg.registration_phase_length;
 
     rpc.warp_to_slot(genesis_slot + registration_phase_length + 1).unwrap();
-
+    
 
     rpc.create_and_send_transaction(
         &[finalize_ix],
