@@ -44,6 +44,7 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
 };
+use light_program_test::program_test::TestRpc;
 
 #[tokio::test]
 async fn init_two_batched_trees() {
@@ -369,8 +370,23 @@ async fn replay_proof_on_tree_b() {
         &forester_program.pubkey(),
         0,
     );
+    
     rpc.create_and_send_transaction(
-        &[reg_forester_ix, reg_epoch_ix, finalize_ix],
+        &[reg_forester_ix, reg_epoch_ix],
+        &gov.pubkey(), 
+        &[&gov, &forester_program],
+    ).await
+    .unwrap();
+
+    let protocol_cfg = &rpc.config.protocol_config;
+    let genesis_slot = protocol_cfg.genesis_slot;
+    let registration_phase_length = protocol_cfg.registration_phase_length;
+
+    rpc.warp_to_slot(genesis_slot + registration_phase_length + 1).unwrap();
+
+
+    rpc.create_and_send_transaction(
+        &[finalize_ix],
         &gov.pubkey(), 
         &[&gov, &forester_program],
     ).await
