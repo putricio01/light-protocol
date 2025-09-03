@@ -412,6 +412,20 @@ async fn replay_proof_on_tree_b() {
     .unwrap();
     assert_eq!(mt_b.get_root().unwrap(), old_root);
 
+    // Mirror the batch into Tree B's output queue so the append instruction
+    // can consume an identical set of leaves.
+    let mut counter_b = 0u32;
+    perform_insert_into_output_queue(
+        &mut rpc,
+        &mut mock_indexer,
+        queue_b.pubkey(),
+        &payer,
+        &mut counter_b,
+        10,
+    )
+    .await
+    .unwrap();
+
     // Craft BatchAppend instruction for Tree B using Tree A's proof. The proof
     // hashes only the old root, new root, leaves hash chain and start index,
     // so it is valid for any tree sharing the same state. The forester
