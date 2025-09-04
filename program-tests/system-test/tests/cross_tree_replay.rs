@@ -341,6 +341,7 @@ async fn replay_proof_on_tree_b() {
 
     // Register the forester program for Tree B’s group using the payer as authority
     let forester_program = Keypair::new();
+    rpc.airdrop_lamports(&forester_program.pubkey(), 300_000_000).await.unwrap();
     let group_b = get_group_pda(tree_b.pubkey());
     register_program_with_registry_program(&mut rpc, &payer, &group_b, &forester_program)
         .await
