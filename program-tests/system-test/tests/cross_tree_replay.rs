@@ -422,7 +422,7 @@ async fn replay_proof_on_tree_b() {
         0,
         bundle.try_to_vec().unwrap(),
     );
-    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer])
+    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer, &forester_program])
         .await
         .unwrap();
 
