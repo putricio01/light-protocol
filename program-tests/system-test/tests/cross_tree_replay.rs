@@ -392,7 +392,7 @@ async fn replay_proof_on_tree_b() {
 
     // Batch‑append proof for Tree B; forester signs as authority
     let ix = create_batch_append_instruction(
-        forester_program.pubkey(),  // authority = forester
+        payer.pubkey(),  // authority = forester
         forester_program.pubkey(),  // derivation = forester
         tree_b.pubkey(),
         queue_b.pubkey(),
@@ -402,7 +402,7 @@ async fn replay_proof_on_tree_b() {
     rpc.create_and_send_transaction(
         &[ix],
         &payer.pubkey(),            // fee payer
-        &[&payer, &forester_program], // signers
+        &[&payer], // signers
     ).await.unwrap();
 
     // Verify Tree B’s root updates to the new root
