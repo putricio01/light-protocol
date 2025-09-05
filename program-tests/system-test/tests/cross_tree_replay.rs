@@ -319,7 +319,7 @@ async fn replay_proof_on_tree_b() {
     let reg_forester_ix = create_register_forester_instruction(
         &payer.pubkey(),            // fee payer
         &payer.pubkey(),            // governance authority
-        &forester_program.pubkey(), // forester authority => stored in forester_pda.authority
+        &payer.pubkey(), // forester authority => stored in forester_pda.authority
         ForesterConfig::default(),
     );
     rpc.create_and_send_transaction(
@@ -330,15 +330,15 @@ async fn replay_proof_on_tree_b() {
 
     // Register epoch (authority must match forester_pda.authority)
     let reg_epoch_ix = create_register_forester_epoch_pda_instruction(
-        &forester_program.pubkey(), // authority = forester_program
-        &forester_program.pubkey(), // derivation = forester_program
+        &payer.pubkey(), // authority = forester_program
+        &payer.pubkey(), // derivation = forester_program
         0,
     );
 
     // Finalise epoch (same authority)
     let finalize_ix = create_finalize_registration_instruction(
-        &forester_program.pubkey(),
-        &forester_program.pubkey(),
+        &payer.pubkey(),
+        &payer.pubkey(),
         0,
     );
 
@@ -347,7 +347,7 @@ async fn replay_proof_on_tree_b() {
     rpc.create_and_send_transaction(
         &[reg_epoch_ix],
         &payer.pubkey(),
-        &[ &forester_program], // both must sign (forester is authority)
+        &[ &payer], // both must sign (forester is authority)
     ).await.unwrap();
 
     // Warp to end of registration phase
@@ -358,7 +358,7 @@ async fn replay_proof_on_tree_b() {
     rpc.create_and_send_transaction(
         &[finalize_ix],
         &payer.pubkey(),
-        &[ &forester_program],
+        &[ &payer],
     ).await.unwrap();
 
     // Generate proof for Tree A
@@ -389,7 +389,7 @@ async fn replay_proof_on_tree_b() {
     // Append batch: payer is authority, forester program is derivation
     let ix = create_batch_append_instruction(
         payer.pubkey(),              // authority (tree owner / governance authority)
-        forester_program.pubkey(),   // derivation (forester program ID)
+        payer.pubkey(),   // derivation (forester program ID)
         tree_b.pubkey(),
         queue_b.pubkey(),
         0,
