@@ -290,7 +290,8 @@ async fn replay_proof_on_tree_b() {
         .await
         .unwrap();
     let payer = rpc.get_payer().insecure_clone();
-
+    
+    //rpc.airdrop_lamports(&payer, 1_000_000_000).await.unwrap();
     // Create Tree A and Tree B (no auto‑register, payer is the authority)
     let tree_a = Keypair::new();
     let queue_a = Keypair::new();
@@ -330,14 +331,7 @@ async fn replay_proof_on_tree_b() {
 
     // Update protocol config authority to the payer
     let gov = rpc.test_accounts().protocol.governance_authority.insecure_clone();
-    let update_cfg_ix = light_registry::sdk::create_update_protocol_config_instruction(
-        gov.pubkey(),
-        Some(payer.pubkey()),
-        None,
-    );
-    rpc.create_and_send_transaction(&[update_cfg_ix], &gov.pubkey(), &[&gov, &payer])
-        .await
-        .unwrap();
+    
 
     // Register the forester program for Tree B’s group using the payer as authority
     let forester_program = Keypair::new();
@@ -347,6 +341,14 @@ async fn replay_proof_on_tree_b() {
         .await
         .unwrap();
 
+        let update_cfg_ix = light_registry::sdk::create_update_protocol_config_instruction(
+            gov.pubkey(),
+            Some(payer.pubkey()),
+            None,
+        );
+        rpc.create_and_send_transaction(&[update_cfg_ix], &gov.pubkey(), &[&gov, &payer])
+            .await
+            .unwrap();
     // Register and finalise the forester PDA and epoch 0 with payer as authority
     let reg_forester_ix = create_register_forester_instruction(
         &payer.pubkey(),
@@ -422,7 +424,7 @@ async fn replay_proof_on_tree_b() {
         0,
         bundle.try_to_vec().unwrap(),
     );
-    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer, &forester_program])
+    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer])
         .await
         .unwrap();
 
