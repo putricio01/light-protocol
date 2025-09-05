@@ -319,7 +319,7 @@ async fn replay_proof_on_tree_b() {
     let reg_forester_ix = create_register_forester_instruction(
         &payer.pubkey(),            // fee payer
         &payer.pubkey(),            // governance authority
-        &payer.pubkey(), // forester authority => stored in forester_pda.authority
+        &forester_program.pubkey(), // forester authority => stored in forester_pda.authority
         ForesterConfig::default(),
     );
     rpc.create_and_send_transaction(
@@ -330,35 +330,36 @@ async fn replay_proof_on_tree_b() {
 
     // Register epoch (authority must match forester_pda.authority)
     let reg_epoch_ix = create_register_forester_epoch_pda_instruction(
-        &payer.pubkey(), // authority = forester_program
-        &payer.pubkey(), // derivation = forester_program
+        &forester_program.pubkey(), // authority = forester_program
+        &forester_program.pubkey(), // derivation = forester_program
         0,
     );
 
-    // Finalise epoch (same authority)
-    let finalize_ix = create_finalize_registration_instruction(
-        &payer.pubkey(),
-        &payer.pubkey(),
-        0,
-    );
-
+    
     // Fund forester and send forester/epoch instructions (sign with both payer and forester)
     rpc.airdrop_lamports(&forester_program.pubkey(), 300_000_000).await.unwrap();
     rpc.create_and_send_transaction(
         &[reg_epoch_ix],
         &payer.pubkey(),
-        &[ &payer], // both must sign (forester is authority)
+        &[ &forester_program], // both must sign (forester is authority)
     ).await.unwrap();
 
     // Warp to end of registration phase
     let protocol_cfg = &rpc.config.protocol_config;
     rpc.warp_to_slot(protocol_cfg.genesis_slot + protocol_cfg.registration_phase_length + 1).unwrap();
 
+    // Finalise epoch (same authority)
+    let finalize_ix = create_finalize_registration_instruction(
+        &forester_program.pubkey(),
+        &forester_program.pubkey(),
+        0,
+    );
+
     // Finalise forester registration
     rpc.create_and_send_transaction(
         &[finalize_ix],
         &payer.pubkey(),
-        &[ &payer],
+        &[ &forester_program],
     ).await.unwrap();
 
     // Generate proof for Tree A
@@ -389,7 +390,7 @@ async fn replay_proof_on_tree_b() {
     // Append batch: payer is authority, forester program is derivation
     let ix = create_batch_append_instruction(
         payer.pubkey(),              // authority (tree owner / governance authority)
-        payer.pubkey(),   // derivation (forester program ID)
+        forester_program.pubkey(),   // derivation (forester program ID)
         tree_b.pubkey(),
         queue_b.pubkey(),
         0,
