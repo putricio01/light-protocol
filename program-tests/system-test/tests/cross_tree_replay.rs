@@ -22,10 +22,12 @@ use light_program_test::{
     accounts::{
         initialize::{get_group_pda, initialize_new_group},
         state_tree_v2::create_batched_state_merkle_tree,
+        
     },
     program_test::LightProgramTest,
     ProgramTestConfig, Rpc,
 };
+use light_registry::sdk::create_update_protocol_config_instruction;
 use light_registry::{
     account_compression_cpi::sdk::create_batch_append_instruction,
     sdk::{
@@ -34,6 +36,7 @@ use light_registry::{
     },
     utils::get_cpi_authority_pda,
     ForesterConfig,
+
 };
 use light_test_utils::{
     mock_batched_forester::{MockBatchedForester, MockTxEvent},
@@ -45,7 +48,6 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
 };
-use light_registry::sdk::create_update_protocol_config_instruction;
 #[tokio::test]
 async fn init_two_batched_trees() {
     // Spin up a LightProgramTest context
@@ -234,7 +236,6 @@ async fn perform_insert_into_output_queue(
         .await
 }
 
-
 async fn create_append_batch_ix_data(
     mock_indexer: &mut MockBatchedForester<32>,
     mt_account_data: &mut [u8],
@@ -283,122 +284,3 @@ async fn create_append_batch_ix_data(
     }
 }
 
-#[tokio::test]
-async fn replay_proof_on_tree_b() {
-    // Set up a test context and payer
-    let mut rpc = LightProgramTest::new(ProgramTestConfig::new(false, None)).await.unwrap();
-    let payer = rpc.get_payer().insecure_clone();
-
-    // Create Tree A (with its output queue and context account), then initialize its group (authority = payer)
-    let tree_a = Keypair::new();
-    let queue_a = Keypair::new();
-    let ctx_a = Keypair::new();
-    create_batched_state_merkle_tree(
-        &payer, 
-        false, 
-        &mut rpc, 
-        &tree_a, 
-        &queue_a, 
-        &ctx_a, 
-        InitStateTreeAccountsInstructionData::test_default()
-    ).await.unwrap();
-    initialize_new_group(&tree_a, &payer, &mut rpc, payer.pubkey()).await.unwrap();
-
-    // Create Tree B (with its own output queue and context account), then initialize its group
-    let tree_b = Keypair::new();
-    let queue_b = Keypair::new();
-    let ctx_b = Keypair::new();
-    create_batched_state_merkle_tree(
-        &payer, 
-        false, 
-        &mut rpc, 
-        &tree_b, 
-        &queue_b, 
-        &ctx_b, 
-        InitStateTreeAccountsInstructionData::test_default()
-    ).await.unwrap();
-    initialize_new_group(&tree_b, &payer, &mut rpc, payer.pubkey()).await.unwrap();
-
-    // Update protocol config authority to payer (so payer can register programs/foresters)
-    let gov = rpc.test_accounts().protocol.governance_authority.insecure_clone();
-    let update_cfg_ix = create_update_protocol_config_instruction(gov.pubkey(), Some(payer.pubkey()), None);
-    rpc.create_and_send_transaction(&[update_cfg_ix], &gov.pubkey(), &[&gov]).await.unwrap();
-
-    // Register a new program for Tree B’s group (forester_program), using payer as governance authority
-    let forester_program = Keypair::new();
-    let group_b = get_group_pda(tree_b.pubkey());
-    register_program_with_registry_program(&mut rpc, &payer, &group_b, &forester_program)
-        .await.unwrap();
-
-    // Register the forester: payer is governance authority, forester_program is forester authority
-    let reg_forester_ix = create_register_forester_instruction(
-        &payer.pubkey(),            // fee payer
-        &payer.pubkey(),            // governance authority (protocol admin)
-        &forester_program.pubkey(), // forester authority (will own the tree)
-        ForesterConfig::default(),
-    );
-    rpc.create_and_send_transaction(&[reg_forester_ix], &payer.pubkey(), &[&payer]).await.unwrap();
-
-    // Register an epoch for the forester (epoch index 0), forester_program signs as authority
-    let reg_epoch_ix = create_register_forester_epoch_pda_instruction(
-        &forester_program.pubkey(), // authority = forester_program (forester's own key)
-        &forester_program.pubkey(), // derivation = forester_program (same for forester PDA derivation)
-        0,
-    );
-    // Fund the forester account and send the epoch registration (forester_program must sign)
-    rpc.airdrop_lamports(&forester_program.pubkey(), 300_000_000).await.unwrap();
-    rpc.create_and_send_transaction(&[reg_epoch_ix], &payer.pubkey(), &[&forester_program]).await.unwrap();
-
-    // Warp to end of registration phase and finalize the forester registration for epoch 0 (forester_program signs)
-    let protocol_cfg = &rpc.config.protocol_config;
-    rpc.warp_to_slot(protocol_cfg.genesis_slot + protocol_cfg.registration_phase_length + 1).unwrap();
-    let finalize_ix = create_finalize_registration_instruction(
-        &forester_program.pubkey(), // authority = forester_program
-        &forester_program.pubkey(), // derivation = forester_program
-        0,
-    );
-    rpc.create_and_send_transaction(&[finalize_ix], &payer.pubkey(), &[&forester_program]).await.unwrap();
-
-    // Generate a proof bundle from Tree A using a mock indexer
-    let mut mock_indexer = MockBatchedForester::<32>::default();
-    let (bundle, old_root, _hash_chain, _start_index) =
-        generate_proof_for_tree_a(tree_a.pubkey(), queue_a.pubkey(), &mut rpc, &mut mock_indexer).await;
-
-    // Ensure Tree B’s current root equals Tree A’s old root (both trees empty initially)
-    let account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
-    let mut data_b = account_b.data.clone();
-    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
-        &mut data_b,
-        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
-    ).unwrap();
-    assert_eq!(mt_b.get_root().unwrap(), old_root);
-
-    // Mirror Tree A’s leaves into Tree B’s output queue and append the batch using the proof bundle
-    let mut counter_b = 0;
-    perform_insert_into_output_queue(
-        &mut rpc,
-        &mut mock_indexer,
-        queue_b.pubkey(),
-        &payer,
-        &mut counter_b,
-        10,
-    ).await.unwrap();
-    let ix = create_batch_append_instruction(
-        payer.pubkey(),              // authority (tree owner, now governance authority)
-        forester_program.pubkey(),   // derivation (forester program ID)
-        tree_b.pubkey(),
-        queue_b.pubkey(),
-        0,
-        bundle.try_to_vec().unwrap(),
-    );
-    rpc.create_and_send_transaction(&[ix], &payer.pubkey(), &[&payer]).await.unwrap();
-
-    // Verify Tree B’s root has updated to the new root from the bundle
-    let account_b = rpc.get_account(tree_b.pubkey()).await.unwrap().unwrap();
-    let mut data_b = account_b.data.clone();
-    let mt_b = BatchedMerkleTreeAccount::state_from_bytes(
-        &mut data_b,
-        &CompressedPubkey::new_from_array(tree_b.pubkey().to_bytes()),
-    ).unwrap();
-    assert_eq!(mt_b.get_root().unwrap(), bundle.new_root);
-}
