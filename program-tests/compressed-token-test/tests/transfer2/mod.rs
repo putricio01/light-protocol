@@ -1,6 +1,7 @@
 pub mod compress_failing;
 pub mod compress_spl_failing;
 pub mod decompress_failing;
+pub mod decompress_without_deposit;
 pub mod functional;
 pub mod no_system_program_cpi_failing;
 pub mod random;

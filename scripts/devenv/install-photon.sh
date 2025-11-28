@@ -11,6 +11,20 @@ install_photon() {
     export CARGO_HOME="${PREFIX}/cargo"
     export PATH="${PREFIX}/cargo/bin:${PATH}"
 
+    # Ensure Photon builds with a modern C/C++ toolchain (needed for protobuf-src on macOS)
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sdk_path=$(xcrun --show-sdk-path 2>/dev/null || true)
+        export CC=${CC:-"$(xcrun --find clang)"}
+        export CXX=${CXX:-"$(xcrun --find clang++)"}
+        export CFLAGS=${CFLAGS:-"-std=c11${sdk_path:+ -isysroot ${sdk_path}}"}
+        export CXXFLAGS=${CXXFLAGS:-"-std=c++11 -stdlib=libc++${sdk_path:+ -isysroot ${sdk_path}}"}
+    else
+        export CC=${CC:-clang}
+        export CXX=${CXX:-clang++}
+        export CFLAGS=${CFLAGS:-"-std=c11"}
+        export CXXFLAGS=${CXXFLAGS:-"-std=c++11"}
+    fi
+
     if ! is_installed "photon"; then
         if [ -f "${PREFIX}/cargo/bin/photon" ]; then
             photon_installed=true
