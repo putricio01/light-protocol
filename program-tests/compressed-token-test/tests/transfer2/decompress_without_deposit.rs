@@ -91,23 +91,28 @@ async fn test_transfer2_ctoken_decompress_mints_unbacked_tokens() {
 
     // Manually craft fake input metadata to satisfy the instruction encoding.
     let mut packed_accounts = PackedAccounts::default();
-    // Mint account (read-only)
-    let mint_index = packed_accounts.insert_or_get_read_only(mint);
-    // Attacker (acts as both owner and signer for fabricated input)
-    let owner_index = packed_accounts.insert_or_get_config(attacker.pubkey(), true, false);
+
     // Fake merkle tree / queue entries so indices exist. These are just funded system accounts
     // to satisfy account loading – no valid compressed state is provided.
     let fake_tree = Keypair::new();
     let fake_queue = Keypair::new();
-    airdrop_lamports(&mut rpc, &fake_tree.pubkey(), 1_000_000).await.unwrap();
+    airdrop_lamports(&mut rpc, &fake_tree.pubkey(), 1_000_000)
+        .await
+        .unwrap();
     airdrop_lamports(&mut rpc, &fake_queue.pubkey(), 1_000_000)
         .await
         .unwrap();
 
+    // Insert tree/queue first to mirror the ordering used by the standard decompression helper.
     let tree_index = packed_accounts.insert_or_get(fake_tree.pubkey());
     let queue_index = packed_accounts.insert_or_get(fake_queue.pubkey());
+
+    // Mint account (read-only)
+    let mint_index = packed_accounts.insert_or_get_read_only(mint);
+    // Attacker (acts as both owner and signer for fabricated input)
+    let owner_index = packed_accounts.insert_or_get_config(attacker.pubkey(), true, false);
     // Ctoken ATA recipient
-    let ctoken_index = packed_accounts.insert_or_get(ctoken_ata);
+    let ctoken_index = packed_accounts.insert_or_get_config(ctoken_ata, false, true);
 
     let fake_input = MultiInputTokenDataWithContext {
         owner: owner_index,
